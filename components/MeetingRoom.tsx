@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   CallControls,
   CallParticipantsList,
@@ -26,10 +26,12 @@ import { cn } from '@/lib/utils';
 import Whiteboard from './Whiteboard';
 import QuizHost from './QuizHost';
 import QuizParticipant from './QuizParticipant';
+import { useQuiz } from './QuizProvider';
 
 type CallLayoutType = 'grid' | 'speaker-left' | 'speaker-right';
 
 const MeetingRoom = () => {
+  const { showQuiz ,setShowQuiz } = useQuiz();
   const searchParams = useSearchParams();
   const isPersonalRoom = !!searchParams.get('personal');
   const router = useRouter();
@@ -38,11 +40,29 @@ const MeetingRoom = () => {
   const [layout, setLayout] = useState<CallLayoutType>('speaker-left');
   const [showParticipants, setShowParticipants] = useState(false);
   const [showWhiteboard, setShowWhiteboard] = useState(false);
-  const [showQuiz, setShowQuiz] = useState(false);
-  const [isQuizHost, setIsQuizHost] = useState(false);
   
   const { useCallCallingState } = useCallStateHooks();
   const callingState = useCallCallingState();
+
+  // Moved useEffect before the early return
+  useEffect(() => {
+    if (!call) return;
+
+    const handleCustomEvent = (event: any) => {
+      console.log('MeetingRoom received custom event:', event);
+      if (event.custom?.type === 'quiz.start') {
+        console.log('Setting quiz state to true');
+        setShowQuiz(true); // Trigger the quiz state change
+      }
+    };
+
+    call.on('custom', handleCustomEvent);
+
+    return () => {
+      console.log('Cleaning up MeetingRoom event listener');
+      call.off('custom', handleCustomEvent);
+    };
+  }, [call, setShowQuiz]);
   
   // Check if current user is the call creator/host
   const isHost = call?.isCreatedByMe;
@@ -55,7 +75,8 @@ const MeetingRoom = () => {
         <div className="size-full">
           <Whiteboard 
             call={call!} 
-            onClose={() => setShowWhiteboard(false)} 
+            onClose={() => setShowWhiteboard(false)}
+            isHost={isHost}
           />
         </div>
       );
@@ -64,11 +85,14 @@ const MeetingRoom = () => {
     if (showQuiz) {
       return (
         <div className="size-full bg-gray-900 p-4">
-          {isQuizHost ? <QuizHost /> : <QuizParticipant />}
+          {isHost ? (
+            <QuizHost />
+          ) : (
+            <QuizParticipant key="quiz-participant" />
+          )}
         </div>
       );
     }
-
     switch (layout) {
       case 'grid':
         return <PaginatedGridLayout />;
@@ -80,15 +104,12 @@ const MeetingRoom = () => {
   };
 
   const handleQuizClick = () => {
-    if (!isHost) return; // Only host can start quiz
+    if (!isHost) return;
     setShowQuiz(true);
     setShowWhiteboard(false);
-    setIsQuizHost(true);
   };
 
   const handleWhiteboardClick = () => {
-    // If user is not host, they can only view the whiteboard
-    // The Whiteboard component will handle the drawing permissions internally
     setShowWhiteboard(true);
     setShowQuiz(false);
   };
@@ -108,11 +129,9 @@ const MeetingRoom = () => {
         </div>
       </div>
       
-      {/* Control bar */}
       <div className="fixed bottom-0 flex w-full items-center justify-center gap-5">
         <CallControls onLeave={() => router.push('/')} />
 
-        {/* Layout dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger className="cursor-pointer rounded-2xl bg-[#19232d] px-4 py-2 hover:bg-[#4c535b]">
             <LayoutList size={20} className="text-white" />
@@ -131,7 +150,6 @@ const MeetingRoom = () => {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Whiteboard button - shown to everyone but with different functionality */}
         <button 
           onClick={handleWhiteboardClick}
           className={cn(
@@ -143,7 +161,6 @@ const MeetingRoom = () => {
           <Edit2 size={20} className="text-white" />
         </button>
 
-        {/* Quiz button - only shown to host */}
         {isHost && (
           <button 
             onClick={handleQuizClick}

@@ -10,6 +10,7 @@ import { useGetCallById } from '@/hooks/useGetCallById';
 import Alert from '@/components/Alert';
 import MeetingSetup from '@/components/MeetingSetup';
 import MeetingRoom from '@/components/MeetingRoom';
+import { QuizProvider } from '@/components/QuizProvider';
 
 const MeetingPage = () => {
   const { id } = useParams();
@@ -31,6 +32,7 @@ const MeetingPage = () => {
   if (notAllowed) return <Alert title="You are not allowed to join this meeting" />;
 
   return (
+    <QuizProvider>
     <main className="h-screen w-full">
       <StreamCall call={call}>
         <StreamTheme>
@@ -43,6 +45,7 @@ const MeetingPage = () => {
         </StreamTheme>
       </StreamCall>
     </main>
+    </QuizProvider>
   );
 };
 

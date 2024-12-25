@@ -1,37 +1,30 @@
-// types/quiz.ts
 export interface QuizQuestion {
     id: string;
     question: string;
     options: string[];
-    correctAnswer: number;
-    timeLimit?: number; // in seconds
+    correctOption: number;
+    timeLimit: number;
+}
+
+export interface QuizAnswer {
+    questionId: string;
+    selectedOption: number;
+    timeTaken: number;
+}
+
+export interface QuizResult {
+    displayName: string;
+    score: number;
+    answers: QuizAnswer[];
+    totalQuestions: number;
 }
 
 export interface Quiz {
     id: string;
     title: string;
-    createdBy: string;
     questions: QuizQuestion[];
+    createdBy: string;
     meetingId: string;
     isActive: boolean;
-    startTime?: number;
-}
-
-export interface QuizResponse {
-    userId: string;
-    userName: string;
-    quizId: string;
-    answers: {
-        questionId: string;
-        selectedOption: number;
-        timeTaken: number;
-    }[];
-    totalScore: number;
-}
-
-export interface QuizState {
-    currentQuiz: Quiz | null;
-    responses: QuizResponse[];
-    activeQuestion: number;
-    isSubmitted: boolean;
+    results: Record<string, QuizResult>;
 }

@@ -1,3 +1,4 @@
+import React from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 
@@ -8,6 +9,22 @@ interface PermissionCardProps {
   title: string;
   iconUrl?: string;
 }
+
+interface AlertProps {
+  children: React.ReactNode;
+}
+
+export const AlertQuiz: React.FC<AlertProps> = ({ children }) => (
+  <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+    {children}
+  </div>
+);
+
+export const AlertDescription: React.FC<AlertProps> = ({ children }) => (
+  <div className="mt-1 text-sm text-gray-500">
+    {children}
+  </div>
+);
 
 const Alert = ({ title, iconUrl }: PermissionCardProps) => {
   return (
