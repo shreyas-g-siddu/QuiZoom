@@ -30,8 +30,18 @@ import { useQuiz } from './QuizProvider';
 
 type CallLayoutType = 'grid' | 'speaker-left' | 'speaker-right';
 
+type QuizEvent = {
+  custom: {
+    type: 'quiz.start'
+    data: {
+      quizId: string
+      title: string
+      totalQuestions: number
+    }
+  }
+};
+
 const MeetingRoom = () => {
-  const { showQuiz ,setShowQuiz } = useQuiz();
   const searchParams = useSearchParams();
   const isPersonalRoom = !!searchParams.get('personal');
   const router = useRouter();
@@ -44,15 +54,24 @@ const MeetingRoom = () => {
   const { useCallCallingState } = useCallStateHooks();
   const callingState = useCallCallingState();
 
-  // Moved useEffect before the early return
+  const { showQuiz, setShowQuiz } = useQuiz();
+  const [quizEvent, setQuizEvent] = useState<QuizEvent['custom'] | null>(null);
+
   useEffect(() => {
     if (!call) return;
 
-    const handleCustomEvent = (event: any) => {
+    const handleCustomEvent = (event: QuizEvent) => {
       console.log('MeetingRoom received custom event:', event);
-      if (event.custom?.type === 'quiz.start') {
-        console.log('Setting quiz state to true');
-        setShowQuiz(true); // Trigger the quiz state change
+      // Only handle quiz events if NOT the host
+      if (!call.isCreatedByMe) {
+        if (event.custom?.type === 'quiz.start') {
+          console.log('Setting quiz state to true for participant');
+          setQuizEvent(event.custom);
+          setShowQuiz(true);
+        } else if (event.custom?.type === 'quiz.end') {
+          setQuizEvent(null);
+          setShowQuiz(false);
+        }
       }
     };
 
@@ -64,7 +83,6 @@ const MeetingRoom = () => {
     };
   }, [call, setShowQuiz]);
   
-  // Check if current user is the call creator/host
   const isHost = call?.isCreatedByMe;
 
   if (callingState !== CallingState.JOINED) return <Loader />;
@@ -86,9 +104,12 @@ const MeetingRoom = () => {
       return (
         <div className="size-full bg-gray-900 p-4">
           {isHost ? (
-            <QuizHost />
+            <QuizHost 
+              onQuizEnd={() => setShowQuiz(false)} 
+              ignoreCustomEvents={true}
+            />
           ) : (
-            <QuizParticipant key="quiz-participant" />
+            <QuizParticipant quizEvent={quizEvent} />
           )}
         </div>
       );

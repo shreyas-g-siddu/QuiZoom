@@ -12,12 +12,13 @@ export interface QuizAnswer {
     timeTaken: number;
 }
 
-export interface QuizResult {
+export type QuizResult = {
     displayName: string;
     score: number;
     answers: QuizAnswer[];
     totalQuestions: number;
-}
+    timeTaken?: number;
+};
 
 export interface Quiz {
     id: string;
