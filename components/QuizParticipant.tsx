@@ -7,9 +7,12 @@ import { Timer } from 'lucide-react';
 import { useQuiz } from './QuizProvider';
 import Leaderboard from './Leaderboard';
 
-interface QuizParticipantProps {
+const QuizParticipant = ({ 
+    quizEvent,
+    onClose
+}: { 
     quizEvent: {
-        type: 'quiz.start' | 'quiz.results';
+        type: 'quiz.start' | 'quiz.end';
         data: {
             quizId: string;
             title: string;
@@ -17,9 +20,8 @@ interface QuizParticipantProps {
             results?: Record<string, QuizResult>;
         };
     } | null;
-}
-
-const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
+    onClose?: () => void;
+}) => {
     const [activeQuiz, setActiveQuiz] = useState<Quiz | null>(null);
     const [currentQuestion, setCurrentQuestion] = useState(0);
     const [timeLeft, setTimeLeft] = useState<number>(0);
@@ -29,6 +31,7 @@ const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
     const [selectedOptions, setSelectedOptions] = useState<(number | null)[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [hasSubmitted, setHasSubmitted] = useState(false);
+    const [forceShowLeaderboard, setForceShowLeaderboard] = useState(false);
     const call = useCall();
     const { showQuiz } = useQuiz();
 
@@ -36,17 +39,41 @@ const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
         if (!quizEvent?.data?.quizId) return;
 
         const unsubscribe = onSnapshot(doc(db, 'quizzes', quizEvent.data.quizId), (snapshot) => {
+            if (!snapshot.exists()) {
+                // Don't automatically close if we have results to show
+                if (onClose && !hasSubmitted) {
+                    onClose();
+                }
+                return;
+            }
+
             const data = snapshot.data();
-            if (data?.results) setLiveResults(data.results);
-            setQuizStarted(data?.isActive ?? false);
+            if (data?.results) {
+                setLiveResults(data.results);
+                // If we have results and user has submitted, force show leaderboard
+                if (hasSubmitted) {
+                    setForceShowLeaderboard(true);
+                }
+            }
             
-            if (!data?.isActive) {
-                setUserStarted(false);
+            // Only update quiz status if we're not showing final results
+            if (!hasSubmitted) {
+                setQuizStarted(data?.isActive ?? false);
+                if (!data?.isActive) {
+                    setUserStarted(false);
+                }
             }
         });
 
         return () => unsubscribe();
-    }, [quizEvent?.data?.quizId]);
+    }, [quizEvent?.data?.quizId, onClose, hasSubmitted]);
+
+    // Handle quiz end event
+    useEffect(() => {
+        if (quizEvent?.type === 'quiz.end' && hasSubmitted) {
+            setForceShowLeaderboard(true);
+        }
+    }, [quizEvent?.type, hasSubmitted]);
 
     useEffect(() => {
         const loadQuiz = async () => {
@@ -61,9 +88,7 @@ const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
 
                 const quizData = { ...quizDoc.data(), id: quizDoc.id } as Quiz;
                 setActiveQuiz(quizData);
-                // Initialize selected options array
                 setSelectedOptions(new Array(quizData.questions.length).fill(null));
-                // Set time for current question only
                 setTimeLeft(quizData.questions[0].timeLimit);
             } catch {
                 setError('Failed to load quiz. Please try again.');
@@ -115,10 +140,8 @@ const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
         if (!activeQuiz) return;
 
         if (currentQuestion === activeQuiz.questions.length - 1) {
-            // Submit all answers if it's the last question
             await submitAllAnswers();
         } else {
-            // Move to next question and reset timer
             setCurrentQuestion(prev => prev + 1);
             setTimeLeft(activeQuiz.questions[currentQuestion + 1].timeLimit);
         }
@@ -153,35 +176,54 @@ const QuizParticipant: React.FC<QuizParticipantProps> = ({ quizEvent }) => {
             });
 
             setHasSubmitted(true);
+            setForceShowLeaderboard(true);
 
-            await call.sendCustomEvent({
-                type: 'quiz.completed',
-                data: {
-                    userId: call.currentUserId,
-                    score,
-                    totalQuestions: activeQuiz.questions.length,
-                },
-            });
-        } catch {
+            // Wrap the custom event in try-catch to handle timeout
+            try {
+                await call.sendCustomEvent({
+                    type: 'quiz.completed',
+                    data: {
+                        userId: call.currentUserId,
+                        score,
+                        totalQuestions: activeQuiz.questions.length,
+                    },
+                });
+            } catch (error) {
+                // Ignore timeout errors for custom events
+                console.warn('Failed to send custom event, but quiz submission was successful');
+            }
+        } catch (error) {
             setError('Failed to submit answers.');
         }
     };
 
     if (!showQuiz || !activeQuiz) return null;
 
-    if (!quizStarted || hasSubmitted) {
+    // Show leaderboard if user has submitted or if quiz is ended
+    if ((!quizStarted && !hasSubmitted) || (hasSubmitted && forceShowLeaderboard)) {
         return (
             <div className="mx-auto max-w-4xl space-y-6 p-6">
                 <div className="mb-6 text-center text-2xl font-bold text-slate-200">
-                    {!quizStarted
+                    {!hasSubmitted
                         ? 'Waiting for the host to start the quiz...'
-                        : 'Thanks for participating! Waiting for other participants...'}
+                        : 'Thanks for participating! Here are the results:'}
                 </div>
                 {hasSubmitted && Object.keys(liveResults).length > 0 && (
-                    <Leaderboard 
-                        results={liveResults}
-                        totalQuestions={activeQuiz.questions.length}
-                    />
+                    <div className="space-y-4">
+                        <Leaderboard 
+                            results={liveResults}
+                            totalQuestions={activeQuiz.questions.length}
+                        />
+                        <button
+                            onClick={() => {
+                                setForceShowLeaderboard(false);
+                                if (onClose) onClose();
+                            }}
+                            className="mx-auto block rounded-lg bg-blue-600 px-6 py-2 text-white hover:bg-blue-700"
+                        >
+                            Close Quiz
+                        </button>
+                    </div>
                 )}
             </div>
         );

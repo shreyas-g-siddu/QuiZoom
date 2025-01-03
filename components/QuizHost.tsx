@@ -2,19 +2,43 @@ import React, { useState, useEffect } from 'react';
 import { useCall } from '@stream-io/video-react-sdk';
 import { addDoc, collection, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Plus, X, Clock, AlertCircle, Play, StopCircle } from 'lucide-react';
-import { AlertQuiz, AlertDescription } from './Alert';
+import { Plus, X, Clock, AlertCircle, Play, StopCircle, Download } from 'lucide-react';
+import Alert, { AlertDescription } from '@/components/Alert';
 import Leaderboard from './Leaderboard';
-import type { Quiz, QuizQuestion, QuizResult } from '../types/quiz';
+import { utils, writeFile } from 'xlsx';
 
-const QuizHost = () => {
+interface QuizQuestion {
+    id: string;
+    question: string;
+    options: string[];
+    correctOption: number;
+    timeLimit: number;
+}
+
+interface QuizResult {
+    displayName: string;
+    score: number;
+    totalQuestions: number;
+    timeTaken: number;
+}
+
+interface Quiz {
+    id: string;
+    title: string;
+    questions: QuizQuestion[];
+    createdBy: string;
+    meetingId: string;
+    isActive: boolean;
+    results: Record<string, QuizResult>;
+}
+
+const QuizHost = ({ onQuizEnd }: { onQuizEnd?: () => void }) => {
     const [activeQuizRef, setActiveQuizRef] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isStarting, setIsStarting] = useState(false);
-    const [timeLeft, setTimeLeft] = useState<number>(0);
+    const [elapsedTime, setElapsedTime] = useState(0);
     const [results, setResults] = useState<Record<string, QuizResult>>({});
     const [quizStatus, setQuizStatus] = useState<'idle' | 'active' | 'ended'>('idle');
-    const [, setIsQuizEnded] = useState(false);
 
     const [quiz, setQuiz] = useState<Quiz>({
         id: '',
@@ -42,12 +66,11 @@ const QuizHost = () => {
         const unsubscribe = onSnapshot(
             doc(db, 'quizzes', activeQuizRef),
             (snapshot) => {
-                const data = snapshot.data() as Quiz;
+                const data = snapshot.data() as Quiz | undefined;
                 if (data) {
                     setQuiz(data);
                     if (data.results) {
                         setResults(data.results);
-                        // Only check for quiz completion if the quiz is still active
                         if (data.isActive) {
                             const participantCount = call?.state.participantCount || 0;
                             const submissionCount = Object.keys(data.results).length;
@@ -57,7 +80,6 @@ const QuizHost = () => {
                             }
                         }
                     }
-                    // Update quiz status based on isActive flag
                     setQuizStatus(data.isActive ? 'active' : 'ended');
                 }
             },
@@ -67,30 +89,22 @@ const QuizHost = () => {
             }
         );
 
-        // Modified cleanup to only unsubscribe if we're explicitly resetting
-        return () => {
-            if (quizStatus === 'idle') {
-                unsubscribe();
-            }
-        };
-    }, [activeQuizRef, call, quizStatus]);
+        return () => unsubscribe();
+    }, [activeQuizRef, call]);
 
+    // Modified timer effect to start from 0
     useEffect(() => {
-        if (!activeQuizRef || timeLeft <= 0) return;
-
-        const timer = setInterval(() => {
-            setTimeLeft((prev) => {
-                if (prev <= 1) {
-                    clearInterval(timer);
-                    endQuiz(results);
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
+        let timer: NodeJS.Timeout;
+        if (quizStatus === 'active') {
+            setElapsedTime(0); // Reset timer when quiz becomes active
+            timer = setInterval(() => {
+                setElapsedTime(prev => prev + 1);
+            }, 1000);
+        } else {
+            setElapsedTime(0); // Reset timer when quiz is not active
+        }
         return () => clearInterval(timer);
-    }, [timeLeft, activeQuizRef]);
+    }, [quizStatus]);
 
     useEffect(() => {
         if (error) {
@@ -98,6 +112,22 @@ const QuizHost = () => {
             return () => clearTimeout(timer);
         }
     }, [error]);
+
+    const downloadResults = () => {
+        const resultsArray = Object.entries(results).map(([, result]) => ({
+            'Participant Name': result.displayName,
+            'Score': result.score,
+            'Total Questions': result.totalQuestions,
+            'Time Taken (seconds)': result.timeTaken,
+            'Percentage': ((result.score / result.totalQuestions) * 100).toFixed(2) + '%'
+        }));
+
+        // Use the imported XLSX utilities with proper typing
+        const wb = utils.book_new();
+        const ws = utils.json_to_sheet(resultsArray);
+        utils.book_append_sheet(wb, ws, 'Quiz Results');
+        writeFile(wb, `quiz_results_${quiz.title}_${new Date().toLocaleDateString()}.xlsx`);
+    };
 
     const validateQuestion = (question: QuizQuestion): boolean => {
         if (!question.question.trim()) {
@@ -146,30 +176,39 @@ const QuizHost = () => {
         if (!call || !activeQuizRef) return;
 
         try {
-            setIsQuizEnded(true);
-
-            // Update the document first
             await updateDoc(doc(db, 'quizzes', activeQuizRef), {
                 isActive: false,
                 results: finalResults,
-                endTime: new Date().toISOString() // Add end time for reference
+                endTime: new Date().toISOString()
             });
 
-            // Send the event
             await call.sendCustomEvent({
-                type: 'quiz.results',
+                type: 'quiz.end',
                 data: {
                     results: finalResults,
-                    quizId: activeQuizRef // Include quiz ID for reference
+                    quizId: activeQuizRef
                 }
             });
 
-            setTimeLeft(0);
+            setElapsedTime(0);
             setQuizStatus('ended');
-            // Don't reset the activeQuizRef here to maintain the connection to Firestore
         } catch (error) {
             console.error('Error ending quiz:', error);
             setError('Failed to end quiz. Please try again.');
+        }
+    };
+
+    const closeQuiz = async () => {
+        if (activeQuizRef) {
+            try {
+                await deleteDoc(doc(db, 'quizzes', activeQuizRef));
+                if (onQuizEnd) {
+                    onQuizEnd();
+                }
+            } catch (error) {
+                console.error('Error cleaning up quiz:', error);
+                setError('Failed to close quiz. Please try again.');
+            }
         }
     };
 
@@ -193,9 +232,6 @@ const QuizHost = () => {
             setIsStarting(true);
             setError(null);
 
-            const totalTime = quiz.questions.reduce((acc, q) => acc + q.timeLimit, 0);
-            setTimeLeft(totalTime);
-
             const quizData = {
                 ...quiz,
                 createdBy: call.currentUserId,
@@ -213,8 +249,7 @@ const QuizHost = () => {
                 data: {
                     quizId: docRef.id,
                     title: quiz.title,
-                    totalQuestions: quiz.questions.length,
-                    totalTime
+                    totalQuestions: quiz.questions.length
                 }
             });
         } catch (error) {
@@ -237,17 +272,16 @@ const QuizHost = () => {
     const resetQuiz = async () => {
         if (activeQuizRef) {
             try {
-                // Optionally archive or delete the quiz document
                 await deleteDoc(doc(db, 'quizzes', activeQuizRef));
             } catch (error) {
                 console.error('Error cleaning up quiz:', error);
             }
         }
 
-        setIsQuizEnded(false);
         setQuizStatus('idle');
         setActiveQuizRef(null);
         setResults({});
+        setElapsedTime(0);
         setQuiz({
             id: '',
             title: '',
@@ -260,37 +294,52 @@ const QuizHost = () => {
     };
 
     return (
-        <div className="mx-auto h-[calc(100vh-40px)] max-w-4xl overflow-y-auto p-6">
+        <div className="mx-auto h-[calc(100vh-40px)] w-full max-w-6xl overflow-y-auto p-6">
             <div className="rounded-lg bg-white p-6 shadow-md">
                 {error && (
-                    <AlertQuiz>
+                    <Alert variant="destructive" className="mb-4">
                         <AlertCircle className="size-4" />
                         <AlertDescription>{error}</AlertDescription>
-                    </AlertQuiz>
+                    </Alert>
                 )}
 
-                {quizStatus === 'active' && (
+                {quizStatus !== 'idle' && (
                     <div className="mb-6 flex items-center justify-between rounded-lg bg-blue-50 p-4">
-                        <span className="font-medium">Quiz in Progress</span>
+                        <span className="font-medium">
+                            {quizStatus === 'active' ? 'Quiz in Progress' : 'Quiz Ended'}
+                        </span>
                         <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-2">
-                                <Clock className="size-5 text-blue-600" />
-                                <span className="font-medium text-blue-600">
-                                    {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
-                                </span>
-                            </div>
-                            <button
-                                onClick={() => endQuiz(results)}
-                                className="flex items-center gap-2 rounded-md bg-red-500 px-3 py-1 text-white hover:bg-red-600"
-                            >
-                                <StopCircle size={16} />
-                                End Quiz
-                            </button>
+                            {quizStatus === 'active' && (
+                                <>
+                                    <div className="flex items-center gap-2">
+                                        <Clock className="size-5 text-blue-600" />
+                                        <span className="font-medium text-blue-600">
+                                            {Math.floor(elapsedTime / 60)}:{(elapsedTime % 60).toString().padStart(2, '0')}
+                                        </span>
+                                    </div>
+                                    <button
+                                        onClick={() => endQuiz(results)}
+                                        className="flex items-center gap-2 rounded-md bg-red-500 px-3 py-1 text-white hover:bg-red-600"
+                                    >
+                                        <StopCircle size={16} />
+                                        End Quiz
+                                    </button>
+                                </>
+                            )}
+                            {quizStatus === 'ended' && Object.keys(results).length > 0 && (
+                                <button
+                                    onClick={downloadResults}
+                                    className="flex items-center gap-2 rounded-md bg-green-500 px-3 py-1 text-white hover:bg-green-600"
+                                >
+                                    <Download size={16} />
+                                    Download Results
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <div className="grid grid-cols-1 gap-6">
                     {quizStatus === 'idle' && (
                         <div className="space-y-6">
                             <h2 className="text-2xl font-bold text-gray-800">Create Quiz</h2>
@@ -432,11 +481,7 @@ const QuizHost = () => {
                                 <Leaderboard
                                     results={results}
                                     totalQuestions={quiz.questions.length}
-                                    onClose={() => {
-                                        if (quizStatus === 'ended') {
-                                            resetQuiz();
-                                        }
-                                    }}
+                                    onClose={closeQuiz}
                                 />
                             </div>
                         </>
